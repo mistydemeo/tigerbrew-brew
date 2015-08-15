@@ -2,14 +2,14 @@ class Keg
   PREFIX_PLACEHOLDER = "@@HOMEBREW_PREFIX@@".freeze
   CELLAR_PLACEHOLDER = "@@HOMEBREW_CELLAR@@".freeze
 
-  def fix_install_names options={}
+  def fix_install_names(options = {})
     mach_o_files.each do |file|
       file.ensure_writable do
         change_dylib_id(dylib_id_for(file, options), file) if file.dylib?
 
         each_install_name_for(file) do |bad_name|
           # Don't fix absolute paths unless they are rooted in the build directory
-          next if bad_name.start_with? '/' and not bad_name.start_with? HOMEBREW_TEMP.to_s
+          next if bad_name.start_with?("/") && !bad_name.start_with?(HOMEBREW_TEMP.to_s)
 
           new_name = fixed_name(file, bad_name)
           change_install_name(bad_name, new_name, file) unless new_name == bad_name
@@ -18,7 +18,7 @@ class Keg
     end
   end
 
-  def relocate_install_names old_prefix, new_prefix, old_cellar, new_cellar, options={}
+  def relocate_install_names(old_prefix, new_prefix, old_cellar, new_cellar, options = {})
     mach_o_files.each do |file|
       file.ensure_writable do
         if file.dylib?
@@ -38,7 +38,7 @@ class Keg
       end
     end
 
-    files = pkgconfig_files | libtool_files | script_files | plist_files
+    files = text_files | libtool_files
 
     files.group_by { |f| f.stat.ino }.each_value do |first, *rest|
       s = first.open("rb", &:read)
@@ -68,11 +68,10 @@ class Keg
   end
 
   # Detects the C++ dynamic libraries in place, scanning the dynamic links
-  # of the files within the keg. This searches only libs contained within
-  # lib/, and ignores binaries and other mach-o objects
+  # of the files within the keg.
   # Note that this doesn't attempt to distinguish between libstdc++ versions,
   # for instance between Apple libstdc++ and GNU libstdc++
-  def detect_cxx_stdlibs(options={})
+  def detect_cxx_stdlibs(options = {})
     skip_executables = options.fetch(:skip_executables, false)
     results = Set.new
 
@@ -86,7 +85,7 @@ class Keg
     results.to_a
   end
 
-  def each_unique_file_matching string
+  def each_unique_file_matching(string)
     Utils.popen_read("/usr/bin/fgrep", "-lr", string, to_s) do |io|
       hardlinks = Set.new
 
@@ -100,7 +99,7 @@ class Keg
 
   def install_name_tool(*args)
     tool = MacOS.locate("install_name_tool")
-    system(tool, *args) or raise ErrorDuringExecution.new(tool, args)
+    system(tool, *args) || raise(ErrorDuringExecution.new(tool, args))
   end
 
   # If file is a dylib or bundle itself, look for the dylib named by
@@ -127,7 +126,7 @@ class Keg
     path.join("lib")
   end
 
-  def each_install_name_for file, &block
+  def each_install_name_for(file, &block)
     dylibs = file.dynamically_linked_libraries
     dylibs.reject! { |fn| fn =~ /^@(loader_|executable_|r)path/ }
     dylibs.each(&block)
@@ -140,52 +139,39 @@ class Keg
     relative_dirname = file.dirname.relative_path_from(path)
     shortpath = HOMEBREW_PREFIX.join(relative_dirname, basename)
 
-    if shortpath.exist? and not options[:keg_only]
+    if shortpath.exist? && !options[:keg_only]
       shortpath.to_s
     else
       opt_record.join(relative_dirname, basename).to_s
     end
   end
 
-  def find_dylib name
+  def find_dylib(name)
     lib.find { |pn| break pn if pn.basename == name } if lib.directory?
   end
 
   def mach_o_files
     mach_o_files = []
     path.find do |pn|
-      next if pn.symlink? or pn.directory?
-      mach_o_files << pn if pn.dylib? or pn.mach_o_bundle? or pn.mach_o_executable?
+      next if pn.symlink? || pn.directory?
+      mach_o_files << pn if pn.dylib? || pn.mach_o_bundle? || pn.mach_o_executable?
     end
 
     mach_o_files
   end
 
-  def script_files
-    script_files = []
-
-    # find all files with shebangs
-    find do |pn|
-      next if pn.symlink? or pn.directory?
-      script_files << pn if pn.text_executable?
+  def text_files
+    text_files = []
+    path.find do |pn|
+      next if pn.symlink? || pn.directory?
+      next if Metafiles::EXTENSIONS.include? pn.extname
+      if Utils.popen_read("/usr/bin/file", "--brief", pn).include?("text") ||
+         pn.text_executable?
+        text_files << pn
+      end
     end
 
-    script_files
-  end
-
-  def pkgconfig_files
-    pkgconfig_files = []
-
-    %w[lib share].each do |dir|
-      pcdir = path.join(dir, "pkgconfig")
-
-      pcdir.find do |pn|
-        next if pn.symlink? or pn.directory? or pn.extname != '.pc'
-        pkgconfig_files << pn
-      end if pcdir.directory?
-    end
-
-    pkgconfig_files
+    text_files
   end
 
   def libtool_files
@@ -193,19 +179,9 @@ class Keg
 
     # find .la files, which are stored in lib/
     lib.find do |pn|
-      next if pn.symlink? or pn.directory? or pn.extname != '.la'
+      next if pn.symlink? || pn.directory? || pn.extname != ".la"
       libtool_files << pn
     end if lib.directory?
     libtool_files
-  end
-
-  def plist_files
-    plist_files = []
-
-    self.find do |pn|
-      next if pn.symlink? or pn.directory? or pn.extname != '.plist'
-      plist_files << pn
-    end
-    plist_files
   end
 end
